@@ -1,0 +1,65 @@
+#include <SPI.h>
+#include <LoRa.h>
+#include <Wire.h>
+#include <DHT.h>
+
+#define DHTPIN 7
+DHT dht(DHTPIN, DHT11);
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+
+  pinMode(A1, INPUT);
+  pinMode(A2,INPUT);
+  pinMode(13, OUTPUT);
+
+  while (!Serial);
+  Serial.println("LoRa Sender");
+
+  if (!LoRa.begin(433E6)) {
+    Serial.println("Starting LoRa failed!");
+    while (1);
+  }
+
+  LoRa.setSyncWord(0xF3);
+}
+
+void loop() {
+
+  digitalWrite(13, HIGH);
+  float h = dht.readHumidity();
+  float t = dht.readTemperature();
+
+  float m = analogRead(A1);
+  float c = analogRead(A2);
+  
+
+  if (isnan(h) || isnan(t))
+  {
+    Serial.println(F("Failed to read from DHT sensor!"));
+    return;
+  }
+
+  Serial.print("Sending packet: ");
+  Serial.print(t);
+  Serial.print(" ");
+  
+  Serial.println(h);
+
+  LoRa.beginPacket();
+  
+  LoRa.print(t);
+  LoRa.print("t");
+  LoRa.print(h);
+  LoRa.print("h");
+  LoRa.print(m);
+  LoRa.print("m");
+  LoRa.print(c);
+  LoRa.print("c");
+  LoRa.endPacket();
+
+  delay(5000);
+}  
