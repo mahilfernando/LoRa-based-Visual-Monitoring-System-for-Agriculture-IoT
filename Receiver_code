@@ -1,0 +1,226 @@
+#include <ArduinoJson.h>
+#include <NTPClient.h>
+#include "NTPClient.h"
+#include "WiFiUdp.h"
+#include <ESP8266WiFi.h>
+#include <Wire.h>
+#include <FirebaseArduino.h>
+#include <LiquidCrystal_I2C.h>
+#include <LoRa.h>
+#include <SPI.h>
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+#define FIREBASE_HOST "********************"
+#define FIREBASE_AUTH "********************"
+#define WIFI_SSID "**************"
+#define WIFI_PASSWORD "********"
+
+const long utcOffsetInSeconds = 19800;
+
+char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+String months[12] = {"Jan", "Feb", "March", "April", "May", "Ju", "July", "August", "September", "October", "November", "December"};
+
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", utcOffsetInSeconds);
+
+#define ss 15
+#define rst 16
+#define dio0 2
+
+void setup() {
+  Serial.begin(115200);
+
+  while (!Serial);
+  Serial.println("LoRa Receiver Callback");
+  LoRa.setPins(ss, rst, dio0);
+
+  if (!LoRa.begin(433E6)) {
+    Serial.println("Starting LoRa failed!");
+    while (1);
+  }
+
+
+  LoRa.setSyncWord(0xF3);
+  Wire.begin(2, 0);  //sda , scl
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(3, 0);
+  lcd.print("Agro Monitor");
+  lcd.setCursor(5, 1);
+  lcd.print("System");
+  delay(3000);
+  lcd.clear();
+  lcd.setCursor(2, 0);
+  Serial.println("Connecting to");
+  lcd.print("Connecting to");
+  Serial.println(WIFI_SSID);
+  lcd.setCursor(3, 1);
+  lcd.print("DataBase");
+  delay(1000);
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("Connecting to ");
+  Serial.print(WIFI_SSID);
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(500);
+  }
+
+  Serial.println();
+  Serial.print("Connected");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+  Firebase.begin(FIREBASE_HOST, FIREBASE_AUTH);
+  timeClient.begin();
+  Serial.println("");
+  Serial.println("WiFi connected");
+
+  lcd.setCursor(2, 0);
+  lcd.print("WiFi connected");
+  lcd.clear();
+
+
+
+}
+void loop() {
+  timeClient.update();
+
+
+  unsigned long epochTime = timeClient.getEpochTime();
+  struct tm *ptm = gmtime ((time_t *)&epochTime);
+  int monthDay = ptm->tm_mday;
+  int currentMonth = ptm->tm_mon + 1;
+  String currentMonthName = months[currentMonth - 1];
+  int currentYear = ptm->tm_year + 1900;
+  String currentDate = String(currentYear) + ":" + String(currentMonth) + ":" + String(monthDay);
+
+
+  String phrase;
+  String temp;
+  String humid;
+  String mouis;
+  String co2;
+  int packetSize = LoRa.parsePacket();
+
+
+  if (packetSize) {
+    // received a packet
+    // read packet
+    while (LoRa.available()) {
+      char a;
+      a = (char)LoRa.read();
+      phrase = String(phrase + a);
+    }
+    //    Serial.println(phrase);
+
+    int firstPosition = 0;
+    int secondPOsition = 0;
+
+    for (int i = 0; i <= phrase.length(); i++) {
+
+      //        28.70t95.00h1023.00m
+
+      if (phrase.charAt(i) == 't') {
+        secondPOsition = i;
+        temp =  phrase.substring(firstPosition, secondPOsition);
+        firstPosition = secondPOsition;
+        secondPOsition = 0;
+      } else if (phrase.charAt(i) == 'h') {
+        secondPOsition = i;
+        humid =  phrase.substring(firstPosition + 1, secondPOsition);
+        firstPosition = secondPOsition;
+        secondPOsition = 0;
+      } else if (phrase.charAt(i) == 'm') {
+        secondPOsition = i;
+        mouis =  phrase.substring(firstPosition + 1, secondPOsition);
+        firstPosition = secondPOsition;
+        secondPOsition = 0;
+      } else if (phrase.charAt(i) == 'c') {
+        secondPOsition = i;
+        co2 =  phrase.substring(firstPosition + 1, secondPOsition);
+      }
+    }
+
+    Serial.println(temp);
+    Serial.println(humid);
+    Serial.println(mouis);
+    Serial.println(co2);
+
+    lcd.setCursor(0, 0);
+    lcd.print("T:");
+    lcd.setCursor(2, 0);
+    lcd.print(temp);
+    lcd.setCursor(0, 1);
+    lcd.print("H:");
+    lcd.setCursor(2, 1);
+    lcd.print(humid);
+
+    lcd.setCursor(8, 0);
+    lcd.print("M:");
+    lcd.setCursor(10, 0);
+    lcd.print(mouis);
+    lcd.setCursor(8, 1);
+    lcd.print("C:");
+    lcd.setCursor(10, 1);
+    lcd.print(co2);
+
+    //delay(5000);
+    StaticJsonBuffer<400> jsonBuffer;
+
+    String datejson =
+      String(currentYear) + String("-")
+      + String(currentMonth) + String("-")
+      + String(monthDay) + String("T")
+      + String(timeClient.getHours())
+      + String(":")
+      + String(timeClient.getMinutes())
+      + String(":")
+      + String(timeClient.getSeconds());
+    //
+    JsonObject& objTemp = jsonBuffer.createObject();
+    objTemp["date"] = datejson;
+    objTemp["value"] = temp.toFloat();
+    //objTemp["value_humid"]=humid;
+
+    JsonObject& objHum = jsonBuffer.createObject();
+    objHum["date"] = datejson;
+    objHum["value"] =  humid.toFloat();
+    //objHum["value_co2"]=co2;
+
+    JsonObject& objsoil = jsonBuffer.createObject();
+    objsoil["date"] = datejson;
+    objsoil["value"] = mouis.toFloat();
+
+    JsonObject& objph = jsonBuffer.createObject();
+    objph["date"] = datejson;
+    objph["value"] =  co2.toFloat();
+
+  
+    
+    Firebase.push("devices/DeviceA/Temp/", objTemp);
+    Firebase.setFloat("devices/DeviceA/Temp/current_temp",temp.toFloat());
+
+    Firebase.push("devices/DeviceA/Hum/", objHum);
+    Firebase.setFloat("devices/DeviceA/Hum/current_hum", humid.toFloat());
+
+    Firebase.push("devices/DeviceA/Mous/", objsoil);
+    Firebase.setFloat("devices/DeviceA/Mous/current_mous",mouis.toFloat());
+
+    Firebase.push("devices/DeviceA/Ph/", objph);
+    Firebase.setFloat("devices/DeviceA/Ph/current_ph", co2.toFloat());
+
+
+    //delay(5000);
+
+
+    if (Firebase.failed())
+    {
+
+      Serial.print("pushing /logs failed:");
+      Serial.println(Firebase.error());
+      return;
+    }
+
+  }
+}
